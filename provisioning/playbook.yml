@@ -1,0 +1,180 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    python_ver: 3.9.5
+    config_filename: pm2.prod.config.js
+    config_path: [INSERT_PATH_TO_CONFIG_FILE]
+    deploy_script: update.sh
+    deploy_path: [INSERT_PATH_TO_DEPLOY_SCRIPT]
+    git_key_path: [INSERT_PATH_TO_GIT_KEY]
+    nr_license_key: "{{ lookup('env', 'NEW_RELIC_LICENSE_KEY') }}"
+
+  roles:
+    - name: newrelic.newrelic-infra
+      vars:
+        log_file: /opt/logs/newrelic-infra.log
+        verbose: 0
+        nrinfragent_config:
+          license_key: '{{ nr_license_key }}'
+          enable_process_metrics: true
+
+  tasks:
+  - name: Update all packages
+    yum:
+      name: '*'
+      state: latest
+  - name: Install required packages
+    yum:
+      name:
+        - gcc
+        - zlib-devel
+        - bzip2
+        - bzip2-devel
+        - readline-devel
+        - sqlite
+        - sqlite-devel
+        - openssl-devel
+        - tk-devel
+        - libffi-devel
+        - xz-devel
+        - git
+      state: present
+  - name: Install pyenv python version manager
+    git:
+      repo: https://github.com/pyenv/pyenv
+      dest: "/home/ec2-user/.pyenv"
+
+  - name: Install pyenv-virtualenv plugin
+    git:
+      repo: https://github.com/pyenv/pyenv-virtualenv
+      dest: "/home/ec2-user/.pyenv/plugins/pyenv-virtualenv"
+
+  - name: Add path etc to .bashrc for pyenv
+    lineinfile:
+      dest: "/home/ec2-user/.bashrc"
+      state: present
+      create: yes
+      line: "{{ item }}"
+    with_items:
+      - 'export PYENV_ROOT="$HOME/.pyenv"'
+      - 'export PATH="$PYENV_ROOT/bin:$PATH"'
+      - 'eval "$(pyenv init -)"'
+      - 'eval "$(pyenv virtualenv-init -)"'
+
+  - name: Ensure .pyenv permissions are set properly
+    file:
+      path=/home/ec2-user/.pyenv
+      recurse=yes
+      owner=ec2-user
+      group=ec2-user
+      state=directory
+
+  - name: Install default python version (3.9.5) with pyenv
+    become: yes
+    become_user: 'ec2-user'
+    shell: . /home/ec2-user/.bashrc && pyenv install 3.9.5
+      creates="/home/ec2-user/.pyenv/versions/3.9.5"
+
+  - name: Switch to the new global python version
+    shell: '{{ item.cmd }}'
+    become_user: 'ec2-user'
+    with_items:
+        - cmd: pyenv global '{{ python_ver }}'
+
+  - name: Setup and install node with nvm
+    become: yes
+    become_flags: -i
+    become_user: 'ec2-user'
+    block:
+      - name: Install nvm
+        ansible.builtin.shell: >
+          curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.38.0/install.sh | bash
+        args:
+          executable: /bin/bash
+          chdir: "$HOME"
+          creates: "$HOME/.nvm/nvm.sh"
+
+      - name: Install node
+        ansible.builtin.shell: |
+          source ~/.bashrc && nvm install {{item}}
+        args:
+          executable: /bin/bash
+          chdir: "$HOME"
+          creates: "$HOME/.nvm/versions/node/v{{item}}"
+        loop:
+          - 16.4.1
+
+  - name: Install pm2
+    become: yes
+    become_user: 'ec2-user'
+    npm:
+      name: pm2
+      state: latest
+      global: yes
+
+  - name: Ensure .ssh directory exists
+    become: yes
+    become_user: 'ec2-user'
+    file:
+      path: $HOME/.ssh
+      state: directory
+      mode: 0700
+
+  - name: Ensure GitHub deploy key is present on the server
+    become: yes
+    become_user: 'ec2-user'
+    copy:
+      src:  '{{ git_key_path }}'
+      dest: $HOME/.ssh
+      mode: 0600
+
+  - name: Clone the code repository
+    become: yes
+    become_user: 'ec2-user'
+    git:
+      repo: git@github.com:timmyb824/slackbot.git
+      dest: $HOME/slackbot
+      accept_hostkey: yes
+      key_file: $HOME/.ssh/id_rsa
+
+  - name: Copy pm2 config file from local to remote host
+    become: yes
+    become_user: 'ec2-user'
+    copy:
+      src:  '{{ config_path }}/{{ config_filename }}'
+      dest: $HOME/slackbot/
+
+  - name: Copy deployment script from local to remote host
+    become: yes
+    become_user: 'ec2-user'
+    copy:
+      src:  '{{ deploy_path }}/{{ deploy_script }}'
+      dest: $HOME/
+
+  - name: Create virtualenv and install requirements
+    shell: '{{ item.cmd }}'
+    become_user: 'ec2-user'
+    with_items:
+        - cmd: pyenv virtualenv '{{ python_ver }}' slackbot
+        - cmd: cd $HOME/slackbot && pyenv local slackbot
+        - cmd: cd $HOME/slackbot && pyenv exec pip install -r requirements.txt
+
+  - name: Delete any old pm2 processes
+    become: yes
+    become_user: 'ec2-user'
+    command: pm2 delete $HOME/slackbot/'{{ config_filename }}'
+    ignore_errors: yes
+
+  - name: Start new pm2 process from config file
+    become: yes
+    become_user: 'ec2-user'
+    command: pm2 start $HOME/slackbot/'{{ config_filename }}'
+
+  - name: Create and save pm2 startup script to keep process persistent
+    shell: '{{ item.cmd }}'
+    become: yes
+    become_user: 'ec2-user'
+    with_items:
+        - cmd: sudo env PATH=$PATH:/home/ec2-user/.nvm/versions/node/v16.4.1/bin /home/ec2-user/.nvm/versions/node/v16.4.1/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user
+        - cmd: pm2 save
