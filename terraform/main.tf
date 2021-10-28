@@ -32,7 +32,7 @@ tags ={
 }
 
 #configure the aws instance
-resource "aws_instance" "csebot" {
+resource "aws_instance" "slackbot" {
   ami           = var.ami
   instance_type = var.instance_type
   vpc_security_group_ids = [aws_security_group.tls-sg.id]
@@ -54,7 +54,7 @@ resource "aws_instance" "csebot" {
 
   # runs the ansible playbook on the instance
   provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -u ec2-user -i '${aws_instance.csebot.public_dns},' --private-key '${var.private_key}' ../provisioning/playbook.yml"
+    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -u ec2-user -i '${aws_instance.slackbot.public_dns},' --private-key '${var.private_key}' ../provisioning/playbook.yml"
   }
 }
 
