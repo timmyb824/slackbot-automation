@@ -1,6 +1,6 @@
 ## Summary
 
-A very basic set of automation scripts that provisons AWS resources (e.g. EC2) with Terraform and then configures them using Ansible. I created this to quickly get my slackbot up and running on an EC2 instance. I inteneded to improve and expand this automation but have been side tracked with other work.
+A very basic set of automation scripts that provisons AWS resources (e.g. EC2) with Terraform and then configures them using Ansible. I created these to quickly get my slackbot up and running on an EC2 instance. I intended to improve and expand this automation but have been side tracked with other work.
 
 ## Dependicies
 
